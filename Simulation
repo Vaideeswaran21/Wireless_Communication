@@ -1,0 +1,127 @@
+% Simulation parameters
+num_nodes = [1]; % Number of stations
+simulation_duration = 86400; % Simulation duration (in s)
+packet_sizes = [24000, 24000]; % Packet sizes in bits for data
+data_rates_payload = [2e6, 2e6]; % Data rates for transmission of actual data
+data_rates_wur = [62.5e3, 62.5e3]; % Data rates for reception in bps for data and acknowledgements
+wur_sizes = [53, 24]; % Acknowledgement packet sizes in bits for different scenarios
+ack_durations = [20e-6, 20e-6]; % Duration of acknowledgement transmission in seconds for different scenarios
+time_step = 500e-3; % time after which AP sends a packet to a node randomly 
+difs = 50e-6;
+sifs = 10e-6;
+slot_duration = 20e-6;
+backoff_window = 8;
+drop_prob_phy = 0.1;
+
+
+% Power consumption parameters
+power_sleep = 1e-3; % Power consumption in sleep mode (1 mW per node)
+power_wakeup_rx = 75e-6; % Power consumption in wakeup receive mode (75 micro W per node)
+power_tx_busy = 100e-3; % Power consumption in transmit busy mode (100 mW)
+power_rx_busy = 5e-3; % Power consumption in receive busy mode   (5 mW)
+power_receiving = 10e-3; % Power consumption while receiving (10 mW)
+power_tx_idle = 2e-3; % Power consumption in transmit idle mode (2 mW)
+power_rx_idle = 2e-3; % Power consumption in receive idle mode (2 mW)
+
+% Initialize arrays to store power consumption
+power_consumption_central = zeros(length(num_nodes), length(packet_sizes));
+power_consumption_peripheral = zeros(length(num_nodes), length(packet_sizes));
+cumulative_power_central = zeros(1, 2*floor(simulation_duration/time_step));
+cumulative_power_peripheral = zeros(1, 2*floor(simulation_duration/time_step));
+time_stamp = zeros(1, simulation_duration/ time_step);
+cumulative_power_count = 1;
+
+% Loop over different packet sizes
+for s = 1:length(packet_sizes)
+    packet_size = packet_sizes(s);
+    data_rate_payload = data_rates_payload(s);
+    data_rate_wur = data_rates_wur(s);
+    wur_size = wur_sizes(s);
+    ack_duration = ack_durations(s);
+    
+    for n = 1:length(num_nodes)
+        % Number of peripheral nodes
+        num_peripheral_nodes = num_nodes(n);
+
+        % Calculate the number of packets sent by the central node
+        num_packets = floor(simulation_duration / time_step);
+
+        % Initialize power consumption
+        total_power_central = 0;
+        total_power_peripheral = 0;
+
+        for t = 1:num_packets
+            % AP behavior 
+            % Calculate the various times associated with AP
+            wifi_packet_duration = packet_size / data_rate_payload;
+            wur_duration = wur_size/data_rate_wur;     
+            backoff_duration = randi(backoff_window)*slot_duration;
+            sleep_duration = time_step - backoff_duration - wur_duration - wifi_packet_duration;
+            sleep_duration = sleep_duration - difs -(sifs) - (2*ack_duration);
+
+            X = rand;
+            tx_count = 1;
+            while X <= drop_prob_phy
+                 tx_count = tx_count + 1;
+                X = rand;
+            end
+
+            total_power_central = total_power_central + (difs + backoff_duration+ sifs)*power_rx_idle*tx_count;
+            total_power_central = total_power_central + (wur_duration + wifi_packet_duration)* power_tx_busy*tx_count;
+            total_power_central = total_power_central + 2*ack_duration*power_receiving*tx_count;
+            total_power_central = total_power_central + sleep_duration*power_sleep*tx_count;
+            cumulative_power_central(cumulative_power_count) = total_power_central;
+            
+            time_stamp(t) = t*time_step;
+
+            % Peripheral nodes behavior
+            % Sleep mode power consumption
+            rx_node_num = 1;
+            total_power_peripheral = total_power_peripheral + (num_peripheral_nodes-rx_node_num) * power_sleep * time_step;
+            % disp(total_power_peripheral)
+            %DIFS and Backoff Duration
+            total_power_peripheral = total_power_peripheral + num_peripheral_nodes * power_sleep * (difs + backoff_duration)*tx_count;
+            % Wakeup receive mode power consumption for all nodes
+            total_power_peripheral = total_power_peripheral + num_peripheral_nodes * power_wakeup_rx * wur_duration*tx_count;
+            % Receive busy mode power consumption
+            total_power_peripheral = total_power_peripheral + rx_node_num * power_rx_busy * (sifs)*tx_count;
+            % Tx Idle mode power consumption
+            total_power_peripheral = total_power_peripheral + rx_node_num * power_tx_idle * (2*sifs)*tx_count;
+            % Acknowledgement transmission power
+            total_power_peripheral = total_power_peripheral + rx_node_num * power_tx_busy * (2*ack_duration)*tx_count;
+            % Receiving busy mode power consumption
+            total_power_peripheral = total_power_peripheral + rx_node_num * power_receiving * wifi_packet_duration*tx_count;
+            cumulative_power_peripheral(cumulative_power_count) = total_power_peripheral;
+            cumulative_power_count = cumulative_power_count + 1;
+        end
+
+        % Calculate average power consumption per node
+        % disp("Total Power Central")
+        % disp(total_power_central)
+        power_consumption_central(n, s) = total_power_central / (simulation_duration/time_step);
+        power_consumption_peripheral(n, s) = total_power_peripheral / ((simulation_duration/time_step) * num_peripheral_nodes);
+    end
+end
+
+disp("Central Power:")
+disp(power_consumption_central)
+
+time_stamp_ds = time_stamp(1:7200:end);
+time_stamp_ds = time_stamp_ds/3600;
+cumulative_power_central_ds = cumulative_power_central(1:7200:end);
+
+figure(3);
+plot(time_stamp_ds, cumulative_power_central_ds(1:floor(length(cumulative_power_central_ds)/2)) , '-o', 'LineWidth', 2, 'DisplayName', 'IEEE801.11ba based HS Frame Format');
+hold on;
+plot(time_stamp_ds, cumulative_power_central_ds(floor(length(cumulative_power_central_ds)/2)+1:end), '-o', 'LineWidth', 2, 'DisplayName', 'Customized HS Frame Format');
+xlabel('Time (in hours)');
+ylabel('Total Energy Consumed (in J)');
+title('Total Cumulative Energy consumption of Central Node');
+legend('Location', 'Best');
+grid on;
+
+
+% Print the average power consumed by the AP
+disp('Average Power Consumption by the Access Point (AP):');
+disp(['Wakeup Packet Size: 53 bits - ', num2str(power_consumption_central(1, 1)), ' W']);
+disp(['Wakeup Packet Size: 24 bits - ', num2str(power_consumption_central(1, 2)), ' W']);
